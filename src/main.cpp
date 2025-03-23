@@ -1,21 +1,12 @@
 /*************************************************************************
-   PROJECT: Bharat Pi 4G Board Code for data push to HiveMQ Cloud
-   AUTHOR: Bharat Pi
+   PROJECT: IoT Gateway
+   AUTHOR: GCT Aquavison - EEE-25/GCT
  
-   FUNC: 4G testing with MQTT call to HiveMQ cloud server.
+   FUNC: To send and receive MQTT messages to HiveMQ cloud server.
    
    SIMCARD: 4G sim cards from Airtel/Vodaphone/Jio/BSNL can be used. 
    
    IMPORTANT: Configure the APN accordingly as per your Sim provider
-   
-   GPS: If you have bought Bharat Pi wtih GPS board then you need to connect 
-        the GPS antenna to the UFL connector and antenna should have clear sky visibility
-        preferrably on the terrace or open field.
-
-   TODO: (Before you upload the code to Bharat Pi board) 
-   1) Change APN as per your Sim provider
-   2) Change the Thingspeak API key as per your account/setup
-   3) Use a power adapter 9V 2amps as the 4G module requires enough power to operate
    
    COPYRIGHT: BharatPi @MIT license for usage on Bharat Pi boards
  *************************************************************************/
@@ -43,7 +34,7 @@
  #include <WebSocketsServer.h>
  #include <ArduinoJson.h>
 
- const char* ssid = "ESP32-WebSocket";
+ const char* ssid = "IoT-Gateway";
  const char* password = "12345678";
 
  WebSocketsServer webSocket(81);
@@ -107,24 +98,7 @@
   "Pumphouse/Drinking-WaterTank/Timerdata"
 };
  
- // Pin definitions
- const int OVERHEAD_TANK_PIN = 19;  
- const int UNDERGROUND_TANK_PIN = 18;  
- const int Pump = 26;
- 
- // ISR variables 
- 
- volatile bool buttonPressed_OHT = false;
- volatile unsigned long lastInterruptTime_OHT = 0;
- 
- volatile bool buttonPressed_UGT = false;
- volatile unsigned long lastInterruptTime_UGT = 0;
- 
- const unsigned long debounceTime = 200; // 200 ms debounce time
- 
- volatile bool OHT_State = false;
- volatile bool UGT_State = false;
- 
+
  /*********************************************
    SECTION: Set APN based on your sim card
      AIRTEL: "airtelgprs.com" 
@@ -142,7 +116,7 @@
  const char* mqtt_username = "Sandhep";
  const char* mqtt_password = "Sandhep13";
  const char* clientID = "ESP32";
- const char* lwt_topic = "Pumphouse/Status";
+ const char* lwt_topic = "Pumphouse/LWT/Status";
  const char* lwt_message = "Offline";
  const int qos = 1;
  const bool lwt_retain = true;
@@ -153,6 +127,7 @@
  SSLClient secure_client(&gsm);
  PubSubClient  client(secure_client);
  
+
  
  /*********************************************
    SECTION: Modem operation functions
@@ -206,49 +181,6 @@
    Serial.println();
  }
 
- 
- /*********************************************
-   SECTION: MQTT Operations 
- *********************************************/
- 
- void callback(char* topic, byte* payload, unsigned int length) {
-   Serial.print("Message arrived [");
-   Serial.print(topic);
-   Serial.print("] ");
-   String message = "";
-   for (int i = 0; i < length; i++) {
-      message += (char)payload[i];
-   }
-   Serial.println(message);
- }
- 
- void reconnect() {
-
-   while (!client.connected()) {
-
-     Serial.print("Attempting MQTT connection...");
-
-     if (client.connect(clientID, mqtt_username, mqtt_password, lwt_topic, qos, lwt_retain, lwt_message)) {
-       
-      Serial.println("connected");
-      client.publish("Pumphouse/Domestic-WaterTank/Status", "Online", true);
-      client.publish("Pumphouse/Drinking-WaterTank/Status", "Online", true);
-      
-      // Subscribe to control topics
-      for (const char* topic : sub_topics) {
-        client.subscribe(topic, qos);
-      }
-       
-     } else {
-       Serial.print("failed, rc=");
-       Serial.print(client.state());
-       Serial.println(" try again in 5 seconds");
-       delay(5000);
-     }
-   }
- }
-
- 
  /*********************************************
    SECTION: WebSocket Operations 
  *********************************************/
@@ -274,7 +206,7 @@ ClientInfo* findClientById(String clientId) {
 }
 
 void sendJsonMessage(uint8_t clientNum, const char* event, const char* value) {
-  StaticJsonDocument<200> doc;
+  JsonDocument doc;
   doc["event"] = event;
   doc["value"] = value;
   String jsonString;
@@ -284,7 +216,7 @@ void sendJsonMessage(uint8_t clientNum, const char* event, const char* value) {
 
 void sendMessageToClient(ClientInfo& device, const char* event, const char* value) {
   if (device.isConnected) {
-      StaticJsonDocument<200> doc;
+      JsonDocument doc;
       doc["event"] = event;
       doc["value"] = value;
       String jsonString;
@@ -298,8 +230,6 @@ void sendMessagetoAllClients() {
   for (int i = 0; i < MAX_CLIENTS; i++) {
       if (clients[i].isConnected) {
           sendMessageToClient(clients[i], "message", ("Hello " + clients[i].name + " - " + String(millis())).c_str());
-          sendMessageToClient(clients[i], "PumpState", "ON");
-          sendMessageToClient(clients[i],"Mode","AUTO");
       }
   }
 }
@@ -308,7 +238,7 @@ void handleEvent(uint8_t clientNum, uint8_t* payload) {
   String message = String((char*)payload);
   Serial.printf("Received from [%u]: %s\n", clientNum, message.c_str());
 
-  StaticJsonDocument<200> doc;
+  JsonDocument doc;
   DeserializationError error = deserializeJson(doc, message);
 
   if (error) {
@@ -422,7 +352,78 @@ void webSocketEvent(uint8_t clientNum, WStype_t type, uint8_t* payload, size_t l
           handleEvent(clientNum, payload);
           break;
   }
-}
+ }
+
+ /*********************************************
+   SECTION: MQTT Operations 
+ *********************************************/
+ 
+ void callback(char* topic, byte* payload, unsigned int length) {
+   Serial.print("Message arrived [");
+   Serial.print(topic);
+   Serial.print("] ");
+   String message = "";
+   for (int i = 0; i < length; i++) {
+      message += (char)payload[i];
+   }
+   Serial.println(message);
+
+   const char* command = message.c_str();
+
+   String messageTopic = String(topic);
+
+   if(messageTopic.equals("Pumphouse/Domestic-WaterTank/Pump_State")){
+
+     Serial.println("Message sent to Device 2");
+     ClientInfo* client = findClientById("device2");
+     sendJsonMessage(client->id, "Pump_State", command);
+
+   }else if(messageTopic.equals("Pumphouse/Drinking-WaterTank/Pump_State")){
+
+     Serial.println("Message sent to Device 1");
+     ClientInfo* client = findClientById("device1");
+     sendJsonMessage(client->id, "Pump_State", command);
+
+   }else if(messageTopic.equals("Pumphouse/Domestic-WaterTank/Mode")){
+
+      Serial.println("Message sent to Device 2");
+      ClientInfo* client = findClientById("device2");
+      sendJsonMessage(client->id, "Mode", command);
+
+   }else if(messageTopic.equals("Pumphouse/Drinking-WaterTank/Mode")){
+
+      Serial.println("Message sent to Device 1");
+      ClientInfo* client = findClientById("device1");
+      sendJsonMessage(client->id, "Mode", command);
+      
+   }
+ }
+ 
+ void reconnect() {
+
+   while (!client.connected()) {
+
+     Serial.print("Attempting MQTT connection...");
+
+     if (client.connect(clientID, mqtt_username, mqtt_password, lwt_topic, qos, lwt_retain, lwt_message)) {
+       
+      Serial.println("connected");
+      client.publish("Pumphouse/Domestic-WaterTank/Status", "Online", true);
+      client.publish("Pumphouse/Drinking-WaterTank/Status", "Online", true);
+      
+      // Subscribe to control topics
+      for (const char* topic : sub_topics) {
+        client.subscribe(topic, qos);
+      }
+       
+     } else {
+       Serial.print("failed, rc=");
+       Serial.print(client.state());
+       Serial.println(" try again in 5 seconds");
+       delay(5000);
+     }
+   }
+ }
 
  /*********************************************
    SECTION: Main setup
@@ -454,7 +455,7 @@ void webSocketEvent(uint8_t clientNum, WStype_t type, uint8_t* payload, size_t l
    delay(2000);
  
    String res;
-   Serial.println("Initializing Modem...");
+   Serial.println("Initializing IoT Gateway...");
  
    if (!modem.init()) {
      digitalWrite(LED_PIN, HIGH);
@@ -579,7 +580,7 @@ void webSocketEvent(uint8_t clientNum, WStype_t type, uint8_t* payload, size_t l
    *******************************************************************/
 
    WiFi.softAP(ssid, password);
-   Serial.print("AP IP Address: ");
+   Serial.print("IoT Gateway Access Point IP Address: ");
    Serial.println(WiFi.softAPIP());
 
    webSocket.begin();
