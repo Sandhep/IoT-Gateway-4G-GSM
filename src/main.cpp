@@ -297,9 +297,31 @@ void handleEvent(uint8_t clientNum, uint8_t* payload) {
 
           sendJsonMessage(clientNum, "status", "UGT_FLOAT OFF");
       }
+  } else if(event == "PumpState"){
+
+     String value = doc["value"];
+
+     if (value == "ON") {
+
+          char topic[200]; 
+          sprintf(topic, "Pumphouse/%s/ManualSwitch/Pump_State", device->name.c_str());
+          client.publish(topic, "ON");
+
+          sendJsonMessage(clientNum, "status", "Pump ON");
+
+      } else {
+
+          char topic[200]; 
+          sprintf(topic, "Pumphouse/%s/ManualSwitch/Pump_State", device->name.c_str());
+          client.publish(topic, "OFF");
+
+          sendJsonMessage(clientNum, "status", "Pump OFF");
+
+     }
+
   } else if (event == "register") {
-      // Already handled during connection
-      sendJsonMessage(clientNum, "status", "Already registered");
+          // Already handled during connection
+          sendJsonMessage(clientNum, "status", "Already registered");
   }
 }
 
