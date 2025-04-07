@@ -91,11 +91,11 @@
   "Pumphouse/Domestic-WaterTank/Pump_State",
   "Pumphouse/Domestic-WaterTank/Mode",
   "Pumphouse/Domestic-WaterTank/Timer",
-  "Pumphouse/Domestic-WaterTank/Timerdata",
+  "Pumphouse/Domestic-WaterTank/TimerOut",
   "Pumphouse/Drinking-WaterTank/Pump_State",
   "Pumphouse/Drinking-WaterTank/Mode",
   "Pumphouse/Drinking-WaterTank/Timer",
-  "Pumphouse/Drinking-WaterTank/Timerdata"
+  "Pumphouse/Drinking-WaterTank/TimerOut",
 };
  
 
@@ -126,327 +126,22 @@
  TinyGsmClient gsm(modem);
  SSLClient secure_client(&gsm);
  PubSubClient  client(secure_client);
+
+ void modemPowerOn();
+ void modemPowerOff();
+ void modemRestart();
+ void printLocalTime();
+ void sendSMS(String message);
+ ClientInfo* findClientByWsId(uint8_t wsId);
+ ClientInfo* findClientById(String clientId);
+ void sendJsonMessage(uint8_t clientNum, const char* event, const char* value);
+ void sendMessageToClient(ClientInfo& device, const char* event, const char* value);
+ void sendMessagetoAllClients();
+ void handleEvent(uint8_t clientNum, uint8_t* payload);
+ void webSocketEvent(uint8_t clientNum, WStype_t type, uint8_t* payload, size_t length);
+ void callback(char* topic, byte* payload, unsigned int length);
+ void reconnect();
  
-
- 
- /*********************************************
-   SECTION: Modem operation functions
- *********************************************/
- void modemPowerOn(){
-   pinMode(PWR_PIN, OUTPUT);
-   digitalWrite(PWR_PIN, LOW);
-   delay(1000);
-   digitalWrite(PWR_PIN, HIGH);
- }
- 
- void modemPowerOff(){
-   pinMode(PWR_PIN, OUTPUT);
-   digitalWrite(PWR_PIN, LOW);
-   delay(1500);
-   digitalWrite(PWR_PIN, HIGH);
- }
- 
- void modemRestart(){
-   modemPowerOff();
-   delay(1000);
-   modemPowerOn();
- }
- 
- void printLocalTime()
- {
-   struct tm timeinfo;
-   if(!getLocalTime(&timeinfo)){
-     Serial.println("Failed to obtain time");
-     return;
-   }
-   Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
- }
- 
- // Define your phone numbers array
- String phoneNumbers[] = {"9384584369"};
- 
- void sendSMS(String message) {
- 
-   // Send SMS to each number in the array
- 
-   for (int i = 0; i < sizeof(phoneNumbers) / sizeof(phoneNumbers[0]); i++) {
-     Serial.print("Sending SMS to ");
-     Serial.println(phoneNumbers[i]);
- 
-     // Send SMS
-     modem.sendSMS(phoneNumbers[i], message);
- 
-     delay(500); // Delay between SMS sends
-   }
-   Serial.println();
- }
-
- /*********************************************
-   SECTION: WebSocket Operations 
- *********************************************/
-
- // Find client by WebSocket ID
-ClientInfo* findClientByWsId(uint8_t wsId) {
-  for (int i = 0; i < MAX_CLIENTS; i++) {
-      if (clients[i].id == wsId && clients[i].isConnected) {
-          return &clients[i];
-      }
-  }
-  return nullptr;
-}
-
-// Find client by clientId
-ClientInfo* findClientById(String clientId) {
-  for (int i = 0; i < MAX_CLIENTS; i++) {
-      if (clients[i].clientId == clientId) {
-          return &clients[i];
-      }
-  }
-  return nullptr;
-}
-
-void sendJsonMessage(uint8_t clientNum, const char* event, const char* value) {
-  JsonDocument doc;
-  doc["event"] = event;
-  doc["value"] = value;
-  String jsonString;
-  serializeJson(doc, jsonString);
-  webSocket.sendTXT(clientNum, jsonString);
-}
-
-void sendMessageToClient(ClientInfo& device, const char* event, const char* value) {
-  if (device.isConnected) {
-      JsonDocument doc;
-      doc["event"] = event;
-      doc["value"] = value;
-      String jsonString;
-      serializeJson(doc, jsonString);
-      webSocket.sendTXT(device.id, jsonString);
-      Serial.printf("Sent message to %s (%s)\n", device.name.c_str(), device.clientId.c_str());
-  }
-}
-
-void sendMessagetoAllClients() {
-  for (int i = 0; i < MAX_CLIENTS; i++) {
-      if (clients[i].isConnected) {
-          sendMessageToClient(clients[i], "message", ("Hello " + clients[i].name + " - " + String(millis())).c_str());
-      }
-  }
-}
-
-void handleEvent(uint8_t clientNum, uint8_t* payload) {
-  String message = String((char*)payload);
-  Serial.printf("Received from [%u]: %s\n", clientNum, message.c_str());
-
-  JsonDocument doc;
-  DeserializationError error = deserializeJson(doc, message);
-
-  if (error) {
-      Serial.println("JSON Parsing Failed!");
-      sendJsonMessage(clientNum, "error", "Invalid JSON");
-      return;
-  }
-
-  String event = doc["event"];
-  
-  // First identify which registered client this is
-  ClientInfo* device = findClientByWsId(clientNum);
-  if (!device) {
-      Serial.println("Message from unregistered client!");
-      sendJsonMessage(clientNum, "error", "Not registered");
-      return;
-  }
-  
-  Serial.printf("Processing command from %s (%s)\n", device->name.c_str(), device->clientId.c_str());
-
-  if (event == "OHT_FLOAT") {
-
-      String value = doc["value"];
-
-      if (value == "ON") {
-
-          char topic[200]; 
-          sprintf(topic, "Pumphouse/%s/Sensor/OHT_Float", device->name.c_str());
-          client.publish(topic, "ON");
-
-          sendJsonMessage(clientNum, "status", "OHT_FLOAT ON");
-
-      } else {
-
-          char topic[200];  
-          sprintf(topic, "Pumphouse/%s/Sensor/OHT_Float", device->name.c_str());
-          client.publish(topic, "OFF");
-
-          sendJsonMessage(clientNum, "status", "OHT_FLOAT OFF");
-      }
-
-  } else if (event == "UGT_FLOAT") {
-      String value = doc["value"];
-      if (value == "ON") {
-
-          char topic[200]; 
-          sprintf(topic, "Pumphouse/%s/Sensor/UGT_Float", device->name.c_str());
-          client.publish(topic, "ON");
-
-          sendJsonMessage(clientNum, "status", "UGT_FLOAT ON");
-      } else {
-
-          char topic[200]; 
-          sprintf(topic, "Pumphouse/%s/Sensor/UGT_Float", device->name.c_str());
-          client.publish(topic, "OFF");
-
-          sendJsonMessage(clientNum, "status", "UGT_FLOAT OFF");
-      }
-  } else if(event == "PumpState"){
-
-     String value = doc["value"];
-
-     if (value == "ON") {
-
-          char topic[200]; 
-          sprintf(topic, "Pumphouse/%s/ManualSwitch/Pump_State", device->name.c_str());
-          client.publish(topic, "ON");
-
-          sendJsonMessage(clientNum, "status", "Pump ON");
-
-      } else {
-
-          char topic[200]; 
-          sprintf(topic, "Pumphouse/%s/ManualSwitch/Pump_State", device->name.c_str());
-          client.publish(topic, "OFF");
-
-          sendJsonMessage(clientNum, "status", "Pump OFF");
-
-     }
-
-  } else if (event == "register") {
-          // Already handled during connection
-          sendJsonMessage(clientNum, "status", "Already registered");
-  }
-}
-
-void webSocketEvent(uint8_t clientNum, WStype_t type, uint8_t* payload, size_t length) {
-  switch (type) {
-      case WStype_CONNECTED: {
-          Serial.printf("Client [%u] connected\n", clientNum);
-          
-          // Extract URL parameters (e.g., ws://ip/?clientId=device1)
-          String url = String((char*)payload);
-          int paramStart = url.indexOf("clientId=");
-          
-          if (paramStart > 0) {
-              String clientId = url.substring(paramStart + 9); // 9 is length of "clientId="
-              clientId.trim();
-              
-              // Find the predefined client with this ID
-              ClientInfo* client = findClientById(clientId);
-              
-              if (client) {
-                  client->id = clientNum;
-                  client->isConnected = true;
-                  Serial.printf("Recognized %s as %s (client [%u])\n", 
-                               clientId.c_str(), client->name.c_str(), clientNum);
-                  sendJsonMessage(clientNum, "welcome", client->name.c_str());
-              } else {
-                  Serial.printf("Unknown clientId: %s\n", clientId.c_str());
-                  sendJsonMessage(clientNum, "error", "Unknown client ID");
-              }
-          } else {
-              Serial.println("Client connected without clientId");
-              sendJsonMessage(clientNum, "error", "No client ID provided");
-          }
-          break;
-      }
-
-      case WStype_DISCONNECTED:
-          Serial.printf("Client [%u] disconnected\n", clientNum);
-          for (ClientInfo client : clients) {
-              if (client.id == clientNum) {
-                  client.isConnected = false;
-                  client.id = 255; // Reset the WebSocket ID
-                  Serial.printf("%s (%s) disconnected\n", 
-                               client.name.c_str(), client.clientId.c_str());
-              }
-          }
-          break;
-
-      case WStype_TEXT:
-          handleEvent(clientNum, payload);
-          break;
-  }
- }
-
- /*********************************************
-   SECTION: MQTT Operations 
- *********************************************/
- 
- void callback(char* topic, byte* payload, unsigned int length) {
-   Serial.print("Message arrived [");
-   Serial.print(topic);
-   Serial.print("] ");
-   String message = "";
-   for (int i = 0; i < length; i++) {
-      message += (char)payload[i];
-   }
-   Serial.println(message);
-
-   const char* command = message.c_str();
-
-   String messageTopic = String(topic);
-
-   if(messageTopic.equals("Pumphouse/Domestic-WaterTank/Pump_State")){
-
-     Serial.println("Message sent to Device 2");
-     ClientInfo* client = findClientById("device2");
-     sendJsonMessage(client->id, "Pump_State", command);
-
-   }else if(messageTopic.equals("Pumphouse/Drinking-WaterTank/Pump_State")){
-
-     Serial.println("Message sent to Device 1");
-     ClientInfo* client = findClientById("device1");
-     sendJsonMessage(client->id, "Pump_State", command);
-
-   }else if(messageTopic.equals("Pumphouse/Domestic-WaterTank/Mode")){
-
-      Serial.println("Message sent to Device 2");
-      ClientInfo* client = findClientById("device2");
-      sendJsonMessage(client->id, "Mode", command);
-
-   }else if(messageTopic.equals("Pumphouse/Drinking-WaterTank/Mode")){
-
-      Serial.println("Message sent to Device 1");
-      ClientInfo* client = findClientById("device1");
-      sendJsonMessage(client->id, "Mode", command);
-      
-   }
- }
- 
- void reconnect() {
-
-   while (!client.connected()) {
-
-     Serial.print("Attempting MQTT connection...");
-
-     if (client.connect(clientID, mqtt_username, mqtt_password, lwt_topic, qos, lwt_retain, lwt_message)) {
-       
-      Serial.println("connected");
-      client.publish("Pumphouse/Domestic-WaterTank/Status", "Online", true);
-      client.publish("Pumphouse/Drinking-WaterTank/Status", "Online", true);
-      
-      // Subscribe to control topics
-      for (const char* topic : sub_topics) {
-        client.subscribe(topic, qos);
-      }
-       
-     } else {
-       Serial.print("failed, rc=");
-       Serial.print(client.state());
-       Serial.println(" try again in 5 seconds");
-       delay(5000);
-     }
-   }
- }
-
  /*********************************************
    SECTION: Main setup
  *********************************************/
@@ -621,3 +316,341 @@ void webSocketEvent(uint8_t clientNum, WStype_t type, uint8_t* payload, size_t l
    client.loop();
    webSocket.loop();
  }
+
+ /*********************************************
+   SECTION: Modem operation functions
+ *********************************************/
+void modemPowerOn(){
+  pinMode(PWR_PIN, OUTPUT);
+  digitalWrite(PWR_PIN, LOW);
+  delay(1000);
+  digitalWrite(PWR_PIN, HIGH);
+}
+
+void modemPowerOff(){
+  pinMode(PWR_PIN, OUTPUT);
+  digitalWrite(PWR_PIN, LOW);
+  delay(1500);
+  digitalWrite(PWR_PIN, HIGH);
+}
+
+void modemRestart(){
+  modemPowerOff();
+  delay(1000);
+  modemPowerOn();
+}
+
+void printLocalTime()
+{
+  struct tm timeinfo;
+  if(!getLocalTime(&timeinfo)){
+    Serial.println("Failed to obtain time");
+    return;
+  }
+  Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
+}
+
+// Define your phone numbers array
+String phoneNumbers[] = {"9384584369"};
+
+void sendSMS(String message) {
+
+  // Send SMS to each number in the array
+
+  for (int i = 0; i < sizeof(phoneNumbers) / sizeof(phoneNumbers[0]); i++) {
+    Serial.print("Sending SMS to ");
+    Serial.println(phoneNumbers[i]);
+
+    // Send SMS
+    modem.sendSMS(phoneNumbers[i], message);
+
+    delay(500); // Delay between SMS sends
+  }
+  Serial.println();
+}
+
+/*********************************************
+  SECTION: WebSocket Operations 
+*********************************************/
+
+// Find client by WebSocket ID
+ClientInfo* findClientByWsId(uint8_t wsId) {
+ for (int i = 0; i < MAX_CLIENTS; i++) {
+     if (clients[i].id == wsId && clients[i].isConnected) {
+         return &clients[i];
+     }
+ }
+ return nullptr;
+}
+
+// Find client by clientId
+ClientInfo* findClientById(String clientId) {
+ for (int i = 0; i < MAX_CLIENTS; i++) {
+     if (clients[i].clientId == clientId) {
+         return &clients[i];
+     }
+ }
+ return nullptr;
+}
+
+void sendJsonMessage(uint8_t clientNum, const char* event, const char* value) {
+ JsonDocument doc;
+ doc["event"] = event;
+ doc["value"] = value;
+ String jsonString;
+ serializeJson(doc, jsonString);
+ webSocket.sendTXT(clientNum, jsonString);
+}
+
+void sendMessageToClient(ClientInfo& device, const char* event, const char* value) {
+ if (device.isConnected) {
+     JsonDocument doc;
+     doc["event"] = event;
+     doc["value"] = value;
+     String jsonString;
+     serializeJson(doc, jsonString);
+     webSocket.sendTXT(device.id, jsonString);
+     Serial.printf("Sent message to %s (%s)\n", device.name.c_str(), device.clientId.c_str());
+ }
+}
+
+void sendMessagetoAllClients() {
+ for (int i = 0; i < MAX_CLIENTS; i++) {
+     if (clients[i].isConnected) {
+         sendMessageToClient(clients[i], "message", ("Hello " + clients[i].name + " - " + String(millis())).c_str());
+     }
+ }
+}
+
+void handleEvent(uint8_t clientNum, uint8_t* payload) {
+ String message = String((char*)payload);
+ Serial.printf("Received from [%u]: %s\n", clientNum, message.c_str());
+
+ JsonDocument doc;
+ DeserializationError error = deserializeJson(doc, message);
+
+ if (error) {
+     Serial.println("JSON Parsing Failed!");
+     sendJsonMessage(clientNum, "error", "Invalid JSON");
+     return;
+ }
+
+ String event = doc["event"];
+ 
+ // First identify which registered client this is
+ ClientInfo* device = findClientByWsId(clientNum);
+ if (!device) {
+     Serial.println("Message from unregistered client!");
+     sendJsonMessage(clientNum, "error", "Not registered");
+     return;
+ }
+ 
+ Serial.printf("Processing command from %s (%s)\n", device->name.c_str(), device->clientId.c_str());
+
+ if (event == "OHT_FLOAT") {
+
+     String value = doc["value"];
+
+     if (value == "ON") {
+
+         char topic[200]; 
+         sprintf(topic, "Pumphouse/%s/Sensor/OHT_Float", device->name.c_str());
+         client.publish(topic, "ON");
+
+         sendJsonMessage(clientNum, "status", "OHT_FLOAT ON");
+
+     } else {
+
+         char topic[200];  
+         sprintf(topic, "Pumphouse/%s/Sensor/OHT_Float", device->name.c_str());
+         client.publish(topic, "OFF");
+
+         sendJsonMessage(clientNum, "status", "OHT_FLOAT OFF");
+     }
+
+ } else if (event == "UGT_FLOAT") {
+     String value = doc["value"];
+     if (value == "ON") {
+
+         char topic[200]; 
+         sprintf(topic, "Pumphouse/%s/Sensor/UGT_Float", device->name.c_str());
+         client.publish(topic, "ON");
+
+         sendJsonMessage(clientNum, "status", "UGT_FLOAT ON");
+     } else {
+
+         char topic[200]; 
+         sprintf(topic, "Pumphouse/%s/Sensor/UGT_Float", device->name.c_str());
+         client.publish(topic, "OFF");
+
+         sendJsonMessage(clientNum, "status", "UGT_FLOAT OFF");
+     }
+ } else if(event == "PumpState"){
+
+    String value = doc["value"];
+
+    if (value == "ON") {
+
+         char topic[200]; 
+         sprintf(topic, "Pumphouse/%s/ManualSwitch/Pump_State", device->name.c_str());
+         client.publish(topic, "ON");
+
+         sendJsonMessage(clientNum, "status", "Pump ON");
+
+     } else {
+
+         char topic[200]; 
+         sprintf(topic, "Pumphouse/%s/ManualSwitch/Pump_State", device->name.c_str());
+         client.publish(topic, "OFF");
+
+         sendJsonMessage(clientNum, "status", "Pump OFF");
+
+    }
+
+ } else if (event == "register") {
+         // Already handled during connection
+         sendJsonMessage(clientNum, "status", "Already registered");
+ }
+}
+
+void webSocketEvent(uint8_t clientNum, WStype_t type, uint8_t* payload, size_t length) {
+ switch (type) {
+     case WStype_CONNECTED: {
+         Serial.printf("Client [%u] connected\n", clientNum);
+         
+         // Extract URL parameters (e.g., ws://ip/?clientId=device1)
+         String url = String((char*)payload);
+         int paramStart = url.indexOf("clientId=");
+         
+         if (paramStart > 0) {
+             String clientId = url.substring(paramStart + 9); // 9 is length of "clientId="
+             clientId.trim();
+             
+             // Find the predefined client with this ID
+             ClientInfo* client = findClientById(clientId);
+             
+             if (client) {
+                 client->id = clientNum;
+                 client->isConnected = true;
+                 Serial.printf("Recognized %s as %s (client [%u])\n", 
+                              clientId.c_str(), client->name.c_str(), clientNum);
+                 sendJsonMessage(clientNum, "welcome", client->name.c_str());
+             } else {
+                 Serial.printf("Unknown clientId: %s\n", clientId.c_str());
+                 sendJsonMessage(clientNum, "error", "Unknown client ID");
+             }
+         } else {
+             Serial.println("Client connected without clientId");
+             sendJsonMessage(clientNum, "error", "No client ID provided");
+         }
+         break;
+     }
+
+     case WStype_DISCONNECTED:
+         Serial.printf("Client [%u] disconnected\n", clientNum);
+         for (ClientInfo client : clients) {
+             if (client.id == clientNum) {
+                 client.isConnected = false;
+                 client.id = 255; // Reset the WebSocket ID
+                 Serial.printf("%s (%s) disconnected\n", 
+                              client.name.c_str(), client.clientId.c_str());
+             }
+         }
+         break;
+
+     case WStype_TEXT:
+         handleEvent(clientNum, payload);
+         break;
+ }
+}
+
+/*********************************************
+  SECTION: MQTT Operations 
+*********************************************/
+
+void callback(char* topic, byte* payload, unsigned int length) {
+  Serial.print("Message arrived [");
+  Serial.print(topic);
+  Serial.print("] ");
+  String message = "";
+  for (int i = 0; i < length; i++) {
+     message += (char)payload[i];
+  }
+  Serial.println(message);
+
+  const char* command = message.c_str();
+
+  String messageTopic = String(topic);
+
+  if(messageTopic.equals("Pumphouse/Domestic-WaterTank/Pump_State")){
+
+    Serial.println("Message sent to Device 2");
+    ClientInfo* client = findClientById("device2");
+    sendJsonMessage(client->id, "Pump_State", command);
+
+  }else if(messageTopic.equals("Pumphouse/Drinking-WaterTank/Pump_State")){
+
+    Serial.println("Message sent to Device 1");
+    ClientInfo* client = findClientById("device1");
+    sendJsonMessage(client->id, "Pump_State", command);
+
+  }else if(messageTopic.equals("Pumphouse/Domestic-WaterTank/Mode")){
+
+     Serial.println("Message sent to Device 2");
+     ClientInfo* client = findClientById("device2");
+     sendJsonMessage(client->id, "Mode", command);
+
+  }else if(messageTopic.equals("Pumphouse/Drinking-WaterTank/Mode")){
+
+     Serial.println("Message sent to Device 1");
+     ClientInfo* client = findClientById("device1");
+     sendJsonMessage(client->id, "Mode", command);
+     
+  }else if(messageTopic.equals("Pumphouse/Domestic-WaterTank/Timer")){
+
+     Serial.println("Message sent to Device 2");
+     ClientInfo* client = findClientById("device2");
+     sendJsonMessage(client->id, "Timer", command);
+
+  }else if(messageTopic.equals("Pumphouse/Drinking-WaterTank/Timer")){
+     Serial.println("Message sent to Device 1");
+     ClientInfo* client = findClientById("device1");
+     sendJsonMessage(client->id, "Timer", command);
+  }else if(messageTopic.equals("Pumphouse/Domestic-WaterTank/TimerOut")){
+
+    Serial.println("Message sent to Device 2");
+    ClientInfo* client = findClientById("device2");
+    sendJsonMessage(client->id, "TimerOut", command);
+
+  }else if(messageTopic.equals("Pumphouse/Drinking-WaterTank/TimerOut")){
+    Serial.println("Message sent to Device 1");
+    ClientInfo* client = findClientById("device1");
+    sendJsonMessage(client->id, "TimerOut", command);
+  }
+}
+
+void reconnect() {
+
+  while (!client.connected()) {
+
+    Serial.print("Attempting MQTT connection...");
+
+    if (client.connect(clientID, mqtt_username, mqtt_password, lwt_topic, qos, lwt_retain, lwt_message)) {
+      
+     Serial.println("connected");
+     client.publish("Pumphouse/Domestic-WaterTank/Status", "Online");
+     client.publish("Pumphouse/Drinking-WaterTank/Status", "Online");
+     
+     // Subscribe to control topics
+     for (const char* topic : sub_topics) {
+       client.subscribe(topic, qos);
+     }
+      
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      delay(5000);
+    }
+  }
+}
