@@ -638,8 +638,8 @@ void reconnect() {
     if (client.connect(clientID, mqtt_username, mqtt_password, lwt_topic, qos, lwt_retain, lwt_message)) {
       
      Serial.println("connected");
-     client.publish("Pumphouse/Domestic-WaterTank/Status", "Online");
-     client.publish("Pumphouse/Drinking-WaterTank/Status", "Online");
+     client.publish("Pumphouse/Domestic-WaterTank/Status", "Online",false);
+     client.publish("Pumphouse/Drinking-WaterTank/Status", "Online",false);
      
      // Subscribe to control topics
      for (const char* topic : sub_topics) {
